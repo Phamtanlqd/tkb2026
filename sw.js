@@ -4,11 +4,11 @@
  *  - Mã nguồn / HTML: network-first (luôn lấy bản mới khi có mạng), rơi về cache khi offline
  * Đổi CACHE_VERSION mỗi lần phát hành để làm mới cache.
  * ===================================================================== */
-const CACHE_VERSION = 'smart-tkb-v2.0.0';
+const CACHE_VERSION = 'smart-tkb-v2.1.0';
 const PRECACHE = [
   './', 'index.html', 'manifest.json', 'css/style.css',
   'js/app.js', 'js/utils.js', 'js/data-loader.js', 'js/dashboard.js', 'js/teacher.js', 'js/class.js',
-  'js/room.js', 'js/search.js', 'js/export.js', 'js/validator.js', 'js/settings.js',
+  'js/room.js', 'js/search.js', 'js/export.js', 'js/validator.js', 'js/settings.js', 'js/auth.js', 'js/config.js',
   'assets/vendor/bootstrap.min.css', 'assets/vendor/bootstrap.bundle.min.js', 'assets/vendor/xlsx.full.min.js',
   'assets/vendor/chart.umd.js', 'assets/vendor/qrcode.min.js', 'assets/vendor/html2pdf.bundle.min.js',
   'assets/vendor/bootstrap-icons/bootstrap-icons.min.css',
@@ -34,7 +34,8 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
 
-  const isCode = req.mode === 'navigate' || /\.(html|js|css|json)$/.test(url.pathname) || url.pathname.endsWith('/');
+  // Mã nguồn và dữ liệu TKB: luôn ưu tiên bản mới nhất khi có mạng
+  const isCode = req.mode === 'navigate' || /\.(html|js|css|json)$/.test(url.pathname) || url.pathname.endsWith('/') || url.pathname.includes('/assets/data/');
   const isVendor = url.pathname.includes('/assets/vendor/');
 
   if (isCode && !isVendor) {

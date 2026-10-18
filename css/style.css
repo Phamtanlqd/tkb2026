@@ -260,6 +260,9 @@ body {
 .issue-table td, .issue-table th { font-size: .9rem; }
 .glass-alert { background: var(--glass-bg); border: 1px solid var(--border); color: var(--text); border-radius: 14px; }
 
+/* ---------- Quản trị ---------- */
+.admin-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+
 /* ---------- Trạng thái trống / chào mừng / kéo thả ---------- */
 .empty-state { text-align: center; padding: 44px 20px; }
 .empty-state > i { font-size: 3rem; color: var(--text-muted); }

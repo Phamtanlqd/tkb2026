@@ -13,6 +13,7 @@ import { renderRooms } from './room.js';
 import { renderCheck, validate } from './validator.js';
 import { renderSettings } from './settings.js';
 import { initGlobalSearch, renderSubject } from './search.js';
+import { isAdmin, login, logout, authEnabled, sessionLeftMinutes } from './auth.js';
 
 const LS = { sources: 'stt2.sources', theme: 'stt2.theme', settings: 'stt2.settings', periods: 'stt2.periods' };
 
@@ -26,6 +27,7 @@ const ctx = {
   theme: 'light',
   canInstall: () => !!deferredInstall,
   install, pickFiles, importFiles, reloadSample, clearData, setTheme, savePeriods, saveSettings,
+  isAdmin, authEnabled, sessionLeftMinutes, doLogin, doLogout,
 };
 
 const VIEWS = {
@@ -50,6 +52,40 @@ function setTheme(t, rerender = true) {
   if (rerender) route();
 }
 
+/* ---------- Phân quyền quản trị ---------- */
+/** Chặn thao tác quản trị nếu chưa đăng nhập */
+function guard() {
+  if (isAdmin()) return true;
+  toast('Chức năng này cần đăng nhập quản trị.', 'warning');
+  location.hash = '#/settings';
+  return false;
+}
+/** Cập nhật giao diện theo quyền (nút bên sidebar) */
+function applyAuthUI() {
+  const b = $('#btnImport');
+  if (isAdmin()) b.innerHTML = '<i class="bi bi-upload"></i> Nạp file TKB';
+  else b.innerHTML = '<i class="bi bi-lock"></i> Đăng nhập quản trị';
+}
+async function doLogin(pw) {
+  const r = await login(pw);
+  if (r.ok) {
+    const saved = lsGet(LS.sources);               // quản trị: ưu tiên dữ liệu đang xem trước trên máy này
+    if (saved && (saved.teacher || saved.class)) { ctx.sources = { teacher: saved.teacher || null, class: saved.class || null }; rebuild(); }
+    applyAuthUI(); route(); toast('Đã đăng nhập quản trị', 'success');
+  }
+  return r;
+}
+async function doLogout() {
+  logout(); applyAuthUI();
+  await loadPublished();                           // trở lại dữ liệu đã công bố
+  rebuild(); route(); toast('Đã đăng xuất quản trị', 'primary');
+}
+/** Nạp dữ liệu đã công bố (assets/data). Trả về true nếu thành công */
+async function loadPublished() {
+  try { const s = await loadSampleSources(window.XLSX); ctx.sources = { teacher: s.teacher, class: s.class }; return true; }
+  catch { return false; }
+}
+
 /* ---------- Dữ liệu ---------- */
 function rebuild() {
   ds = buildDataset(ctx.sources, ctx.settings);
@@ -68,6 +104,7 @@ function setBusy(on, msg = 'Đang xử lý…') {
 }
 
 async function importFiles(files) {
+  if (!guard()) return;
   const list = files.filter((f) => /\.(xls|xlsx)$/i.test(f.name));
   if (!list.length) return toast('Chỉ hỗ trợ file .xls / .xlsx', 'danger');
   setBusy(true, 'Đang đọc & nhận dạng file…');
@@ -85,25 +122,27 @@ async function importFiles(files) {
     console.error(e); toast('Lỗi đọc file: ' + e.message, 'danger', 5000);
   } finally { setBusy(false); }
 }
-function pickFiles() { const i = $('#fileInput'); i.value = ''; i.click(); }
+function pickFiles() { if (!guard()) return; const i = $('#fileInput'); i.value = ''; i.click(); }
 
 async function reloadSample() {
+  if (!guard()) return;
   setBusy(true, 'Đang nạp dữ liệu mẫu…');
   try {
     const s = await loadSampleSources(window.XLSX);
     ctx.sources = { teacher: s.teacher, class: s.class };
-    persist(); rebuild(); route();
-    toast('Đã nạp dữ liệu mẫu (tuần 7)', 'success');
+    lsDel(LS.sources); rebuild(); route();
+    toast('Đã nạp lại dữ liệu đã công bố', 'success');
   } catch (e) {
     toast('Không nạp được dữ liệu mẫu – hãy mở ứng dụng qua máy chủ web (xem start.bat / start.sh) hoặc chọn file thủ công.', 'warning', 6000);
   } finally { setBusy(false); }
 }
 function clearData() {
+  if (!guard()) return;
   ctx.sources = { teacher: null, class: null };
-  lsDel(LS.sources); rebuild(); route(); toast('Đã xóa dữ liệu', 'primary');
+  lsDel(LS.sources); rebuild(); route(); toast('Đã xóa dữ liệu lưu trên máy này', 'primary');
 }
-function saveSettings(s) { ctx.settings = s; lsSet(LS.settings, s); rebuild(); route(); }
-function savePeriods(list) { setPeriods(list); lsSet(LS.periods, PERIODS); rebuild(); route(); }
+function saveSettings(s) { if (!guard()) return; ctx.settings = s; lsSet(LS.settings, s); rebuild(); route(); }
+function savePeriods(list) { if (!guard()) return; setPeriods(list); lsSet(LS.periods, PERIODS); rebuild(); route(); }
 
 /* ---------- PWA ---------- */
 async function install() {
@@ -126,7 +165,9 @@ function weekNumber(now) {
   return ds.meta.week + Math.floor((today - start) / (7 * 864e5));
 }
 let lastKey = '';
+let wasAdmin = isAdmin();
 function updateHeader() {
+  if (wasAdmin !== isAdmin()) { wasAdmin = isAdmin(); applyAuthUI(); if (location.hash.startsWith('#/settings')) route(true); }
   const now = new Date();
   $('#hdClock').textContent = formatTime(now);
   $('#hdDate').textContent = formatDate(now);
@@ -179,10 +220,13 @@ function renderWelcome(host) {
     <img src="assets/icons/logo.svg" alt="" width="84" height="84">
     <h2>Chào mừng đến Smart Timetable V2</h2>
     <p class="text-muted">Nạp file thời khóa biểu (.xls / .xlsx) để bắt đầu. Hệ thống tự nhận dạng TKB giáo viên và TKB lớp, không cần cấu hình.</p>
-    <div class="d-flex gap-2 justify-content-center flex-wrap">
+    ${isAdmin() ? `<div class="d-flex gap-2 justify-content-center flex-wrap">
       <button class="btn btn-primary btn-lg" id="wPick"><i class="bi bi-upload"></i> Chọn file Excel</button>
-      <button class="btn btn-outline-primary btn-lg" id="wSample"><i class="bi bi-magic"></i> Dùng dữ liệu mẫu</button></div>
-    <div class="drop-zone mt-4" id="wDrop"><i class="bi bi-cloud-arrow-up"></i><p class="mb-0">hoặc kéo thả file vào đây</p></div></div>`;
+      <button class="btn btn-outline-primary btn-lg" id="wSample"><i class="bi bi-magic"></i> Nạp dữ liệu đã công bố</button></div>
+    <div class="drop-zone mt-4" id="wDrop"><i class="bi bi-cloud-arrow-up"></i><p class="mb-0">hoặc kéo thả file vào đây</p></div>`
+    : `<p class="text-muted">Hiện chưa có dữ liệu thời khóa biểu. Vui lòng liên hệ quản trị viên.</p>
+       <a class="btn btn-outline-primary" href="#/settings"><i class="bi bi-lock"></i> Đăng nhập quản trị</a>`}</div>`;
+  if (!isAdmin()) return;
   $('#wPick').onclick = pickFiles;
   $('#wSample').onclick = reloadSample;
   const dz = $('#wDrop');
@@ -208,21 +252,22 @@ async function init() {
   $('#btnTheme').onclick = () => setTheme(ctx.theme === 'dark' ? 'light' : 'dark');
   $('#btnMenu').onclick = openSidebar;
   $('#backdrop').onclick = closeSidebar;
-  $('#btnImport').onclick = pickFiles;
+  $('#btnImport').onclick = () => { if (isAdmin()) pickFiles(); else location.hash = '#/settings'; };
+  applyAuthUI();
   $('#btnInstallTop').onclick = install;
   $('#fileInput').onchange = (e) => importFiles([...e.target.files]);
   window.addEventListener('hashchange', () => route());
   window.addEventListener('dragover', (e) => e.preventDefault());
-  window.addEventListener('drop', (e) => { if (!e.target.closest?.('.drop-zone')) { e.preventDefault(); if (e.dataTransfer?.files?.length) importFiles([...e.dataTransfer.files]); } });
+  window.addEventListener('drop', (e) => { if (!e.target.closest?.('.drop-zone')) { e.preventDefault(); if (e.dataTransfer?.files?.length && isAdmin()) importFiles([...e.dataTransfer.files]); } });
   initGlobalSearch({ input: $('#globalSearch'), panel: $('#searchPanel'), getDataset: () => ds });
 
   // Dữ liệu: đã lưu → mẫu đi kèm → trống
+  // Người xem luôn thấy dữ liệu đã công bố (assets/data); quản trị đang đăng nhập thì ưu tiên bản xem trước lưu trên máy.
   const saved = lsGet(LS.sources);
-  if (saved && (saved.teacher || saved.class)) ctx.sources = { teacher: saved.teacher || null, class: saved.class || null };
-  else {
-    try { const s = await loadSampleSources(window.XLSX); ctx.sources = { teacher: s.teacher, class: s.class }; persist(); }
-    catch { /* chạy bằng file:// hoặc không có dữ liệu mẫu → hiển thị màn hình chào */ }
-  }
+  const hasSaved = saved && (saved.teacher || saved.class);
+  if (isAdmin() && authEnabled() && hasSaved) ctx.sources = { teacher: saved.teacher || null, class: saved.class || null };
+  else if (!(await loadPublished()) && hasSaved) ctx.sources = { teacher: saved.teacher || null, class: saved.class || null };
+  else if (!authEnabled() && hasSaved && !ctx.sources.teacher && !ctx.sources.class) ctx.sources = { teacher: saved.teacher || null, class: saved.class || null };
   rebuild();
   route();
   setInterval(updateHeader, 1000);

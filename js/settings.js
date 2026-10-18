@@ -2,8 +2,49 @@
  * settings.js – Trang "Cài Đặt": giao diện, nạp file, cấu hình tiết, phòng, PWA
  * ===================================================================== */
 import { PERIODS, DEFAULT_PERIODS, escapeHtml, toast, SUBJECTS, APP_VERSION, formatDate } from './utils.js';
+import { hashPassword } from './auth.js';
+
+/** Giao diện cho người xem: chỉ đổi giao diện, cài ứng dụng và đăng nhập quản trị */
+function renderVisitor(host, ds, ctx) {
+  host.innerHTML = `
+    <div class="page-head"><div><h2><i class="bi bi-gear"></i> Cài Đặt</h2></div></div>
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <div class="glass card-pad mb-3">
+          <div class="card-title-row"><h6><i class="bi bi-palette"></i> Giao diện</h6></div>
+          <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="swDark" ${ctx.theme === 'dark' ? 'checked' : ''}>
+            <label class="form-check-label" for="swDark">Chế độ tối (Dark Mode)</label></div>
+        </div>
+        <div class="glass card-pad">
+          <div class="card-title-row"><h6><i class="bi bi-phone"></i> Ứng dụng (PWA)</h6></div>
+          <p class="small text-muted">Cài đặt lên thiết bị để mở nhanh và dùng offline.</p>
+          <button class="btn btn-primary btn-sm" id="btnInstall" ${ctx.canInstall() ? '' : 'disabled'}><i class="bi bi-download"></i> Cài đặt ứng dụng</button>
+          <p class="small text-muted mt-3 mb-0">Smart Timetable V2 · phiên bản ${APP_VERSION}${ds.meta.week ? ` · Dữ liệu tuần ${ds.meta.week}` : ''}</p>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="glass card-pad">
+          <div class="card-title-row"><h6><i class="bi bi-shield-lock"></i> Quản trị</h6></div>
+          <p class="small text-muted">Nạp file thời khóa biểu, xóa dữ liệu, chỉnh giờ học và phòng học chỉ dành cho quản trị viên.</p>
+          <form id="loginForm" class="d-flex gap-2" autocomplete="off">
+            <input type="password" id="adminPw" class="form-control" placeholder="Mật khẩu quản trị" autocomplete="current-password" required>
+            <button class="btn btn-primary" type="submit"><i class="bi bi-box-arrow-in-right"></i> Đăng nhập</button>
+          </form>
+          <div id="loginMsg" class="small text-danger mt-2"></div>
+        </div>
+      </div>
+    </div>`;
+  host.querySelector('#swDark').onchange = (e) => ctx.setTheme(e.target.checked ? 'dark' : 'light');
+  host.querySelector('#btnInstall').onclick = () => ctx.install();
+  host.querySelector('#loginForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await ctx.doLogin(host.querySelector('#adminPw').value);
+    if (!r.ok) { host.querySelector('#loginMsg').textContent = r.msg; host.querySelector('#adminPw').select(); }
+  };
+}
 
 export function renderSettings(host, ds, ctx) {
+  if (!ctx.isAdmin()) return renderVisitor(host, ds, ctx);
   const s = ctx.settings;
   const src = ctx.sources;
   const fileInfo = (label, x) => x
@@ -13,6 +54,21 @@ export function renderSettings(host, ds, ctx) {
   host.innerHTML = `
     <div class="page-head"><div><h2><i class="bi bi-gear"></i> Cài Đặt</h2></div></div>
     <div class="row g-3">
+      <div class="col-12"><div class="glass card-pad admin-bar">
+        <div><i class="bi ${ctx.authEnabled() ? 'bi-unlock-fill text-success' : 'bi-exclamation-triangle-fill text-warning'}"></i>
+          <b>${ctx.authEnabled() ? 'Đang ở chế độ quản trị' : 'Chưa bật mật khẩu quản trị – ai cũng chỉnh sửa được'}</b>
+          ${ctx.authEnabled() ? `<small class="text-muted"> · phiên còn khoảng ${ctx.sessionLeftMinutes()} phút</small>` : ''}</div>
+        <div class="d-flex gap-2 flex-wrap">
+          <button class="btn btn-sm btn-light" id="btnPwTool"><i class="bi bi-key"></i> Tạo mã mật khẩu mới</button>
+          ${ctx.authEnabled() ? '<button class="btn btn-sm btn-outline-danger" id="btnLogout"><i class="bi bi-box-arrow-right"></i> Đăng xuất quản trị</button>' : ''}
+        </div>
+        <div class="small text-muted w-100">Dữ liệu nạp tại đây chỉ lưu trên trình duyệt này (xem trước). Để công bố cho mọi người: thay 2 file trong thư mục <code>assets/data</code> rồi đẩy lên GitHub.</div>
+        <div id="pwTool" class="w-100" hidden>
+          <div class="input-group input-group-sm mb-2"><input type="text" id="pwNew" class="form-control" placeholder="Nhập mật khẩu mới" autocomplete="off">
+            <button class="btn btn-primary" id="pwGen">Tạo mã</button></div>
+          <textarea id="pwOut" class="form-control form-control-sm" rows="2" readonly placeholder="Dán dòng ADMIN_HASH này vào js/config.js"></textarea>
+        </div>
+      </div></div>
       <div class="col-lg-6">
         <div class="glass card-pad mb-3">
           <div class="card-title-row"><h6><i class="bi bi-cloud-arrow-up"></i> Dữ liệu thời khóa biểu</h6></div>
@@ -67,6 +123,13 @@ export function renderSettings(host, ds, ctx) {
     </div>`;
 
   /* --- sự kiện --- */
+  host.querySelector('#btnLogout')?.addEventListener('click', () => ctx.doLogout());
+  host.querySelector('#btnPwTool').onclick = () => { const t = host.querySelector('#pwTool'); t.hidden = !t.hidden; };
+  host.querySelector('#pwGen').onclick = async () => {
+    const pw = host.querySelector('#pwNew').value;
+    if (pw.length < 6) return toast('Mật khẩu nên có ít nhất 6 ký tự', 'warning');
+    host.querySelector('#pwOut').value = `ADMIN_HASH: '${await hashPassword(pw)}',`;
+  };
   const pick = host.querySelector('#btnPick');
   pick.onclick = () => ctx.pickFiles();
   const dz = host.querySelector('#dropZone');
